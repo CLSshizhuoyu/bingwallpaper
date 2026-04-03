@@ -1,312 +1,207 @@
-import sys
 import requests
 import os
 import json
-import random
 from urllib.parse import urlparse
 from pathlib import Path
 from PIL import Image
 from PIL.ExifTags import TAGS
-from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit,
-                             QPushButton, QVBoxLayout, QHBoxLayout,
-                             QMessageBox, QProgressBar, QFrame)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
-from PyQt5.QtGui import (QFont, QPalette, QColor, QPixmap, QBrush,
-                         QImage, QIcon)  # 新增QIcon导入
 
 
-# 原有功能函数保持不变
 def modify_image_metadata(input_path, output_path, title, copyright):
+    """
+    修改图片的标题和版权信息
+    
+    参数:
+        input_path: 输入图片路径
+        output_path: 输出图片路径
+        title: 新的标题
+        copyright: 新的版权信息
+    """
     try:
+        # 打开图片
         with Image.open(input_path) as img:
-            exif_data = img.getexif() or {}
-            title_tag_id = next(
-                (tid for tid, tname in TAGS.items() if tname == "ImageDescription"), None)
-            copyright_tag_id = next(
-                (tid for tid, tname in TAGS.items() if tname == "Copyright"), None)
+            # 尝试获取现有EXIF数据
+            exif_data = img.getexif()
+
+            # 创建或更新EXIF数据
+            if exif_data is None:
+                exif_data = {}
+
+            # 查找标题和版权对应的标签ID
+            title_tag_id = None
+            copyright_tag_id = None
+
+            for tag_id, tag_name in TAGS.items():
+                if tag_name == "ImageDescription":  # 对应图片标题
+                    title_tag_id = tag_id
+                elif tag_name == "Copyright":  # 对应版权信息
+                    copyright_tag_id = tag_id
+
+            # 设置新的标题和版权信息
             if title_tag_id:
                 exif_data[title_tag_id] = title
             if copyright_tag_id:
                 exif_data[copyright_tag_id] = copyright
+
+            # 保存修改后的图片
             img.save(output_path, exif=exif_data)
+
     except Exception as e:
+        # 保留异常捕获但不输出信息
         pass
 
 
 def get_file_extension(content_type):
+    """根据Content-Type获取文件扩展名"""
     if not content_type:
-        return '.jpg'
+        return '.jpg'  # 默认扩展名
+    
     content_type = content_type.lower()
-    ext_map = {
-        'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
-        'image/webp': '.webp', 'image/svg+xml': '.svg', 'image/bmp': '.bmp'
-    }
-    return ext_map.get(content_type, '.jpg')
-
+    if 'image/jpeg' in content_type:
+        return '.jpg'
+    elif 'image/png' in content_type:
+        return '.png'
+    elif 'image/gif' in content_type:
+        return '.gif'
+    elif 'image/webp' in content_type:
+        return '.webp'
+    elif 'image/svg+xml' in content_type:
+        return '.svg'
+    elif 'image/bmp' in content_type:
+        return '.bmp'
+    else:
+        return '.jpg'  # 默认扩展名
 
 def get_program_directory():
-    """获取程序所在文件夹的绝对路径（适配PyInstaller打包）"""
-    import sys
-    if getattr(sys, 'frozen', False):
-        # 打包后的EXE运行环境
-        return Path(sys.executable).resolve().parent
-    else:
-        # 开发环境（普通Python运行）
-        return Path(__file__).resolve().parent
-
+    """获取程序所在文件夹的绝对路径"""
+    return Path(__file__).resolve().parent
 
 def crawl_webpage(url):
+    """爬取网页内容并返回JSON数据"""
     try:
+        print(f"正在爬取网页: {url}")
+        # 添加请求头模拟浏览器，避免被反爬
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
         response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except (json.JSONDecodeError, Exception):
+        response.raise_for_status()  # 检查请求是否成功
+        
+        # 尝试解析JSON数据
+        json_data = response.json()
+        print("成功获取并解析JSON数据")
+        return json_data
+        
+    except json.JSONDecodeError:
+        print("网页内容不是有效的JSON格式")
+        return None
+    except Exception as e:
+        print(f"爬取网页失败: {str(e)}")
         return None
 
 
 def download_image_from_url(image_url, image_name, date):
+    """从指定URL下载图片，保存到程序所在文件夹，以当天日期为文件名"""
     try:
+        # 获取程序所在目录
         program_dir = get_program_directory()
+        print(f"程序所在目录: {program_dir}")
+        
+        # 发送请求下载图片
+        print(f"正在下载图片: {image_url}")
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        response = requests.get(
-            image_url, headers=headers, timeout=10, stream=True)
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(image_url, headers=headers, timeout=10, stream=True)
         response.raise_for_status()
+        
+        # 获取文件扩展名
         content_type = response.headers.get('Content-Type')
         extension = get_file_extension(content_type)
+        
+        # 生成以当天日期为基础的文件名 (格式: YYYYMMDD)
         today = date
         filename = f"{today}{extension}"
+
+        # 检查文件是否已存在，如果存在则添加序号
         file_path = os.path.join(program_dir, filename)
         counter = 1
         while os.path.exists(file_path):
             filename = f"{today}_{counter}{extension}"
             file_path = os.path.join(program_dir, filename)
             counter += 1
-        new_title = image_name.split(
-            ' (')[0] if ' (' in image_name else image_name
-        new_copyright = image_name.split(
-            '© ')[1][:-1] if '© ' in image_name else ""
+        
+        # 输入图片路径
+        input_image = file_path  # 替换为你的图片路径
+
+        # 设置要修改的标题和版权信息
+        new_title = image_name.split(' (')[0]
+        new_copyright = image_name.split('© ')[1][:-1]
+
+        # 保存图片
         with open(file_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=1024):
                 if chunk:
                     f.write(chunk)
-        modify_image_metadata(file_path, file_path, new_title, new_copyright)
+
+        print(f"图片已保存至: {file_path}")
+
+        # 调用函数进行修改（移到return之前，并修正变量名）
+        modify_image_metadata(input_image, input_image, new_title, new_copyright)
+
         return file_path
-    except Exception:
+        
+    except Exception as e:
+        print(f"下载图片失败: {str(e)}")
         return None
 
-
-def main_logic(Index=0):
+def main(Index=0):
+    # 要爬取的网页URL（请替换为实际的目标URL）
+    # 替换为返回JSON数据的网页URL
+    #"""
     target_url = f"https://bing.biturl.top/?resolution=UHD&format=json&mkt=en-US&index={Index}"
+
+    # 1. 爬取网页获取JSON数据
     json_data = crawl_webpage(target_url)
+    
     if not json_data:
-        return "无法继续执行，JSON数据获取失败"
+        print("无法继续执行，退出程序")
+        return
+    #"""
+
+    """
+    json_data = {
+        "start_date": "20190605",
+        "end_date": "20190606",
+        "url": "https://www.bing.com/th?id=OHR.MulberryArtificialHarbour_ZH-CN3973249802_1920x1080.jpg",
+        "copyright": "The Mulberry Port Site after the Normandy Invasion, Arromances les Bains, Normandy, France (© Javier Gil/Alamy)",
+        "copyright_link": "http://www.bing.com/search?q=%E6%A1%91%E6%A0%91%E6%B8%AF%E9%81%97%E5%9D%80&form=hpcapt&mkt=zh-cn"
+    }
+    """
+
+    # 2. 从JSON数据中提取图片URL
     image_url = json_data.get('url')
     image_name = json_data.get('copyright')
-    date = json_data.get('end_date')
+    date = json_data.get('end_date')#US&CN服务区存在时差
+
     if image_url:
-        file_path = download_image_from_url(image_url, image_name, date)
-        return f"图片下载完成，保存路径：{file_path}" if file_path else "图片下载失败"
+        # 3. 下载图片
+        download_image_from_url(image_url, image_name, date)
+        print("图片下载流程完成")
     else:
-        return "JSON数据中未找到'url'字段"
-
-
-class DownloadThread(QThread):
-    progress_signal = pyqtSignal(int)
-    result_signal = pyqtSignal(str)
-
-    def __init__(self, index_str):
-        super().__init__()
-        self.index_str = index_str
-
-    def run(self):
-        try:
-            if ',' in self.index_str:
-                start = min(7, max(0, int(self.index_str.split(',')[0])))
-                end = min(7, max(0, int(self.index_str.split(',')[1])))
-                total = end - start + 1
-                current = 0
-                for i in range(start, end + 1):
-                    current += 1
-                    self.progress_signal.emit(int(current / total * 100))
-                    result = main_logic(i)
-                self.result_signal.emit(f"批量下载完成！最后结果：{result}")
-            else:
-                self.progress_signal.emit(50)
-                result = main_logic(int(self.index_str))
-                self.progress_signal.emit(100)
-                self.result_signal.emit(result)
-        except Exception as e:
-            self.result_signal.emit(f"执行出错：{str(e)}")
-            self.progress_signal.emit(0)
-
-
-class BingWallpaperDownloader(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.init_background()
-        self.init_ui()
-
-    def init_background(self):
-        program_dir = get_program_directory()
-        bg_files = ["bj1.jpg", "bj2.jpg", "bj3.jpg"]
-        bg_paths = [os.path.join(program_dir, file) for file in bg_files]
-        valid_bg_paths = [path for path in bg_paths if os.path.exists(path)]
-        self.bg_pixmap = None
-        if valid_bg_paths:
-            selected_bg = random.choice(valid_bg_paths)
-            self.bg_pixmap = QPixmap(selected_bg)
-            if not self.bg_pixmap.isNull():
-                self.bg_width = self.bg_pixmap.width()
-                self.bg_height = self.bg_pixmap.height()
-
-    def init_ui(self):
-        self.setWindowTitle('Bing壁纸下载器')
-
-        # ========== 新增：设置窗口图标 ==========
-        program_dir = get_program_directory()
-        icon_path = os.path.join(program_dir, "icon.ico")
-        if os.path.exists(icon_path):  # 检查图标文件是否存在
-            self.setWindowIcon(QIcon(icon_path))
-
-        # 设置窗口尺寸
-        if self.bg_pixmap and not self.bg_pixmap.isNull():
-            self.setFixedSize(self.bg_width, self.bg_height)
-        else:
-            self.setFixedSize(500, 300)
-
-        # 全局字体调整：主字体楷体12，提示文字缩小为楷体10
-        main_font = QFont("楷体", 12)
-        tip_font = QFont("楷体", 10)
-        self.setFont(main_font)
-
-        if self.bg_pixmap and not self.bg_pixmap.isNull():
-            self.bg_label = QLabel(self)
-            self.bg_label.setGeometry(0, 0, self.bg_width, self.bg_height)
-            self.bg_label.setPixmap(self.bg_pixmap.scaled(
-                self.bg_width, self.bg_height,
-                Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation
-            ))
-            self.bg_label.lower()
-
-        palette = QPalette()
-        palette.setColor(QPalette.WindowText, QColor(102, 0, 204))
-        palette.setColor(QPalette.Button, QColor(153, 51, 255))
-        palette.setColor(QPalette.ButtonText, Qt.white)
-        self.setPalette(palette)
-
-        # 文字提示优化
-        label = QLabel('请输入下载的壁纸日期0~7（0表示今日，批量用英文逗号隔开）：', self)
-        label.setFont(tip_font)
-        label.setAlignment(Qt.AlignCenter)
-        label.setWordWrap(True)
-        label.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 120); padding: 5px; border-radius: 5px;")
-
-        self.index_input = QLineEdit(self)
-        self.index_input.setPlaceholderText('例如：0 或 0,3')
-        self.index_input.setStyleSheet("""
-            QLineEdit {
-                padding: 8px; 
-                border: 2px solid #9933ff; 
-                border-radius: 5px;
-                background-color: rgba(255, 255, 255, 180);
-                color: #6600cc;
-            }
-        """)
-
-        download_btn = QPushButton('开始下载', self)
-        download_btn.setStyleSheet("""
-            QPushButton {
-                padding: 10px; 
-                border-radius: 8px;
-                background-color: #9933ff;
-                color: white;
-            }
-            QPushButton:hover {
-                background-color: #aa55ff;
-            }
-            QPushButton:pressed {
-                background-color: #8822ee;
-            }
-        """)
-        download_btn.clicked.connect(self.start_download)
-
-        self.progress_bar = QProgressBar(self)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 2px solid #9933ff;
-                border-radius: 8px;
-                text-align: center;
-                color: #6600cc;
-                background-color: rgba(255, 255, 255, 180);
-            }
-            QProgressBar::chunk {
-                background-color: #9933ff;
-                border-radius: 6px;
-            }
-        """)
-
-        self.result_label = QLabel('', self)
-        self.result_label.setAlignment(Qt.AlignCenter)
-        self.result_label.setWordWrap(True)
-        self.result_label.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 120); padding: 5px; border-radius: 5px;")
-
-        # 布局调整
-        v_layout = QVBoxLayout()
-        h_layout = QHBoxLayout()
-        h_layout.addWidget(self.index_input)
-        h_layout.addWidget(download_btn)
-
-        v_layout.addStretch()
-        v_layout.addWidget(label)
-        v_layout.addSpacing(5)
-        v_layout.addLayout(h_layout)
-        v_layout.addSpacing(10)
-        v_layout.addWidget(self.progress_bar)
-        v_layout.addSpacing(10)
-        v_layout.addWidget(self.result_label)
-        v_layout.addStretch()
-
-        main_container = QWidget(self)
-        main_container.setLayout(v_layout)
-        main_container.setFixedWidth(int(self.width() * 0.9))
-        main_container.move(int(self.width() * 0.05), int(self.height() * 0.1))
-        main_container.setStyleSheet("background-color: transparent;")
-
-    def start_download(self):
-        index_str = self.index_input.text().strip() or '0'
-        self.progress_bar.setValue(0)
-        self.result_label.setText('')
-        self.download_thread = DownloadThread(index_str)
-        self.download_thread.progress_signal.connect(self.update_progress)
-        self.download_thread.result_signal.connect(self.show_result)
-        self.download_thread.start()
-
-    def update_progress(self, value):
-        self.progress_bar.setValue(value)
-
-    def show_result(self, result):
-        self.result_label.setText(result)
-        QMessageBox.information(self, '执行结果', result)
-
-
+        print("JSON数据中未找到'url'字段")
+    
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    app.setFont(QFont("楷体", 12))
-
-    # ========== 可选：设置应用全局图标（任务栏也显示） ==========
-    program_dir = get_program_directory()
-    icon_path = os.path.join(program_dir, "icon.ico")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
-
-    window = BingWallpaperDownloader()
-    window.show()
-    sys.exit(app.exec_())
+    Index = input("请输入下载的壁纸日期0~7，0表示今日（批量下载请用英文逗号隔开）:")
+    if Index:
+        try:
+            if ',' in Index:
+                start = min(7, max(0, int(Index.split(',')[0])))
+                end = min(7, max(0, int(Index.split(',')[1])))
+                for i in range(start, (end + 1)):
+                    main(i)
+            else:main(int(Index))
+        except Exception:pass
+    elif Index == 'c':pass
+    else:main()
+    
